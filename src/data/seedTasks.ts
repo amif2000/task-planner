@@ -1,7 +1,7 @@
 import type { Task } from '../types';
 
 // Fixed IDs so re-seeding is idempotent
-export const SEED_TASKS: Omit<Task, 'createdAt'>[] = [
+export const SEED_TASKS: Omit<Task, 'createdAt' | 'completedMinutes' | 'completedSessions'>[] = [
   // High priority — urgent, short tasks
   {
     id: 'seed-1', title: 'Fix login bug reported by QA',

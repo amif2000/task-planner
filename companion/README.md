@@ -54,3 +54,49 @@ Save it as `task-planner-companion.bat` and add a shortcut to the Startup folder
 | `GET /api/meetings?date=YYYY-MM-DD` | Meetings for a specific date |
 | `GET /api/meetings?start=YYYY-MM-DD&end=YYYY-MM-DD` | Meetings in a date range |
 | `POST /api/refresh` | Force a cache refresh from Outlook |
+| `POST /api/meetings/sync` | **Create/update task sessions as Outlook meetings** |
+
+### POST /api/meetings/sync
+
+Syncs scheduled task sessions to Outlook as calendar meetings.
+
+**Features:**
+- Automatically deletes all existing Task Planner meetings (identified by `[Task Planner]` prefix)
+- Creates new meetings for each task session scheduled that day
+- Meetings are marked as **"Free"** so others can schedule over them
+- No conflicts with your calendar — Task Planner owns only meetings it creates
+
+**Request:**
+```json
+{
+  "meetings": [
+    {
+      "title": "Task name",
+      "date": "2026-08-16",
+      "start": "09:00",
+      "end": "10:30"
+    }
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "deleted": 3,
+  "created": 2,
+  "failed": 0,
+  "meetings": [
+    {
+      "title": "[Task Planner] Task name",
+      "date": "2026-08-16",
+      "start": "09:00",
+      "end": "10:30"
+    }
+  ],
+  "errors": []
+}
+```
+
+**UI Integration:**  
+In the React app, click **"Sync to Outlook"** on the Day Schedule view to sync today's scheduled task sessions.

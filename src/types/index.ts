@@ -17,6 +17,20 @@ export interface Task {
   maxSessionMinutes: number;
   /** Max sessions scheduled per day. null = unlimited. Default: null */
   maxSessionsPerDay: number | null;
+  /** Minutes of work already completed (logged by marking sessions done). Default: 0 */
+  completedMinutes: number;
+  /** Concrete work sessions that were marked done, kept in place on the timeline. Default: [] */
+  completedSessions: CompletedSession[];
+}
+
+export interface CompletedSession {
+  /** Local ISO date "YYYY-MM-DD" the session was completed on */
+  date: string;
+  /** "HH:mm" */
+  start: string;
+  /** "HH:mm" */
+  end: string;
+  minutes: number;
 }
 
 export interface Meeting {
@@ -44,6 +58,8 @@ export interface TimeSlot {
   sessionIndex?: number;
   /** Total sessions scheduled today for this task */
   sessionTotal?: number;
+  /** True when this slot is an already-completed session (rendered in place, not re-planned) */
+  completed?: boolean;
 }
 
 export interface UnscheduledEntry {

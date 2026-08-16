@@ -1,4 +1,4 @@
-import { useMemo, useEffect, useState } from 'react';
+import { useMemo, useEffect, useState, useCallback } from 'react';
 import { useTaskStore } from '../../store/useTaskStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { useDateStore } from '../../store/useDateStore';
@@ -9,9 +9,10 @@ import {
 } from '../../data/meetings';
 import { getScheduleForDate } from '../../utils/scheduler';
 import { getHourMarks, toMinutes, formatTime } from '../../utils/timeUtils';
+import { syncTasksToOutlook, syncAllTasksToOutlook, toLocalISODate } from '../../utils/outlookSync';
 import MeetingBlock from './MeetingBlock';
 import TaskBlock from './TaskBlock';
-import { CalendarX, Wifi, WifiOff } from 'lucide-react';
+import { CalendarX, Wifi, WifiOff, Upload, Loader, Calendar, RefreshCw } from 'lucide-react';
 
 export default function TimelineView() {
   const tasks = useTaskStore((s) => s.tasks);
@@ -21,35 +22,91 @@ export default function TimelineView() {
 
   const [source, setSource] = useState<MeetingSource>('mock');
   const [meetingsReady, setMeetingsReady] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
+  // Bumped after every successful meeting refresh to force schedule recompute
+  const [refreshTick, setRefreshTick] = useState(0);
+
+  // Refresh meetings from the companion, then trigger a schedule recompute
+  const runRefresh = useCallback(() => {
+    setIsRefreshing(true);
+    return refreshMeetings(selectedDate)
+      .then((src) => {
+        setSource(src);
+        setLastSyncedAt(new Date());
+        setRefreshTick((t) => t + 1);
+      })
+      .finally(() => setIsRefreshing(false));
+  }, [selectedDate]);
 
   // Fetch / refresh meetings whenever the selected date changes
   useEffect(() => {
     setMeetingsReady(false);
-    refreshMeetings(selectedDate).then((src) => {
-      setSource(src);
-      setMeetingsReady(true);
-    });
-  }, [selectedDate]);
+    runRefresh().then(() => setMeetingsReady(true));
+  }, [runRefresh]);
 
-  // Also re-fetch every 5 minutes while the view is open
+  // Also re-fetch every 60 seconds while the view is open
   useEffect(() => {
-    const id = setInterval(() => {
-      refreshMeetings(selectedDate).then(setSource);
-    }, 5 * 60 * 1000);
+    const id = setInterval(runRefresh, 60 * 1000);
     return () => clearInterval(id);
-  }, [selectedDate]);
+  }, [runRefresh]);
 
   const dayMeetings = useMemo(
     () => (meetingsReady ? getCachedMeetingsForDate(selectedDate) : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedDate, meetingsReady],
+    [selectedDate, meetingsReady, refreshTick],
   );
 
   const schedule = useMemo(
     () => getScheduleForDate(tasks, selectedDate, settings, getCachedMeetingsForDate),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [tasks, selectedDate, settings, meetingsReady],
+    [tasks, selectedDate, settings, meetingsReady, refreshTick],
   );
+
+  const handleSyncToOutlook = async () => {
+    setIsSyncing(true);
+    setSyncStatus(null);
+    try {
+      const dateStr = toLocalISODate(selectedDate);
+      const result = await syncTasksToOutlook(schedule.slots, dateStr);
+      setSyncStatus({
+        type: 'success',
+        message: `Deleted ${result.deleted} old meetings. Created ${result.created} new meetings.`,
+      });
+      // Refresh meetings from Outlook after sync (also recomputes schedule)
+      setTimeout(runRefresh, 1000);
+    } catch (err) {
+      setSyncStatus({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Sync failed',
+      });
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleSyncAllDays = async () => {
+    setIsSyncing(true);
+    setSyncStatus(null);
+    try {
+      const result = await syncAllTasksToOutlook(tasks, settings);
+      setSyncStatus({
+        type: 'success',
+        message: `Synced across multiple days. Deleted ${result.deleted} old meetings. Created ${result.created} new meetings.`,
+      });
+      // Refresh meetings from Outlook after sync (also recomputes schedule)
+      setTimeout(runRefresh, 1000);
+    } catch (err) {
+      setSyncStatus({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Sync failed',
+      });
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   const hourMarks = getHourMarks(workStart, workEnd);
   const totalMins = toMinutes(workEnd) - toMinutes(workStart);
@@ -60,18 +117,80 @@ export default function TimelineView() {
       <div className="flex-1">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-base font-semibold text-slate-700">Day Schedule</h2>
-          <span
-            className={`flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border
-              ${source === 'outlook'
-                ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
-                : 'text-slate-500 bg-slate-100 border-slate-200'}`}
-            title={source === 'outlook' ? 'Live Outlook calendar' : 'Mock meeting data — start the companion for live data'}
-          >
-            {source === 'outlook'
-              ? <><Wifi size={11} /> Outlook</>
-              : <><WifiOff size={11} /> Mock data</>}
-          </span>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1">
+              <button
+                onClick={handleSyncToOutlook}
+                disabled={isSyncing || schedule.slots.filter((s) => s.type === 'task').length === 0}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-full bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                title="Sync today's task sessions to Outlook"
+              >
+                {isSyncing ? (
+                  <>
+                    <Loader size={12} className="animate-spin" /> Syncing...
+                  </>
+                ) : (
+                  <>
+                    <Upload size={12} /> Today
+                  </>
+                )}
+              </button>
+              <button
+                onClick={handleSyncAllDays}
+                disabled={isSyncing || tasks.filter((t) => t.status !== 'done').length === 0}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-full bg-purple-50 border border-purple-200 text-purple-700 hover:bg-purple-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                title="Sync all upcoming days until all tasks are allocated"
+              >
+                {isSyncing ? (
+                  <>
+                    <Loader size={12} className="animate-spin" /> Syncing...
+                  </>
+                ) : (
+                  <>
+                    <Calendar size={12} /> All Days
+                  </>
+                )}
+              </button>
+            </div>
+            <span
+              className={`flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border
+                ${source === 'outlook'
+                  ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                  : 'text-slate-500 bg-slate-100 border-slate-200'}`}
+              title={source === 'outlook' ? 'Live Outlook calendar' : 'Mock meeting data — start the companion for live data'}
+            >
+              {source === 'outlook'
+                ? <><Wifi size={11} /> Outlook</>
+                : <><WifiOff size={11} /> Mock data</>}
+            </span>
+            {/* Refresh indicator + last-synced timestamp */}
+            <button
+              onClick={runRefresh}
+              disabled={isRefreshing}
+              className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-600 disabled:cursor-default transition-colors"
+              title="Refresh meetings from Outlook now"
+            >
+              <RefreshCw size={11} className={isRefreshing ? 'animate-spin text-blue-500' : ''} />
+              {isRefreshing
+                ? <span className="text-blue-500">Updating…</span>
+                : lastSyncedAt
+                  ? <span>Updated {lastSyncedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                  : <span>—</span>}
+            </button>
+          </div>
         </div>
+
+        {syncStatus && (
+          <div
+            className={`mb-4 p-3 rounded-lg text-sm ${
+              syncStatus.type === 'success'
+                ? 'bg-green-50 border border-green-200 text-green-700'
+                : 'bg-red-50 border border-red-200 text-red-700'
+            }`}
+          >
+            {syncStatus.message}
+          </div>
+        )}
 
         <div
           className="relative bg-white border border-slate-200 rounded-xl overflow-hidden"
@@ -107,7 +226,7 @@ export default function TimelineView() {
               if (slot.type === 'task' && slot.task) {
                 return (
                   <TaskBlock
-                    key={`t-${slot.task.id}-${slot.sessionIndex ?? 0}-${i}`}
+                    key={`t-${slot.task.id}-${slot.completed ? 'done' : slot.sessionIndex ?? 0}-${i}`}
                     task={slot.task}
                     start={slot.start}
                     end={slot.end}
@@ -115,6 +234,8 @@ export default function TimelineView() {
                     workEnd={workEnd}
                     sessionIndex={slot.sessionIndex}
                     sessionTotal={slot.sessionTotal}
+                    completed={slot.completed}
+                    date={toLocalISODate(selectedDate)}
                   />
                 );
               }

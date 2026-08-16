@@ -20,10 +20,58 @@ function normalizeMeetings(meetings: Meeting[]): Meeting[] {
   return merged;
 }
 
+/** Local ISO date "YYYY-MM-DD" (no UTC shift) */
+function localISODate(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+/** Sum of completed minutes for a task (from concrete sessions, falling back to legacy counter) */
+function totalCompletedMinutes(task: Task): number {
+  const sessions = task.completedSessions;
+  if (sessions && sessions.length > 0) {
+    return sessions.reduce((sum, s) => sum + s.minutes, 0);
+  }
+  return task.completedMinutes ?? 0;
+}
+
+/** Compute free intervals within [workStart, workEnd] given busy intervals */
+function computeFreeIntervals(
+  busy: Array<{ start: number; end: number }>,
+  workStartMins: number,
+  workEndMins: number,
+): Array<{ start: number; end: number }> {
+  const sorted = busy
+    .filter((b) => b.end > b.start)
+    .sort((a, b) => a.start - b.start);
+  const merged: Array<{ start: number; end: number }> = [];
+  for (const b of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && b.start <= last.end) {
+      last.end = Math.max(last.end, b.end);
+    } else {
+      merged.push({ ...b });
+    }
+  }
+  const free: Array<{ start: number; end: number }> = [];
+  let cur = workStartMins;
+  for (const b of merged) {
+    const s = Math.max(b.start, workStartMins);
+    const e = Math.min(b.end, workEndMins);
+    if (s > cur) free.push({ start: cur, end: s });
+    cur = Math.max(cur, e);
+  }
+  if (cur < workEndMins) free.push({ start: cur, end: workEndMins });
+  return free;
+}
+
 export function buildSchedule(
   tasks: Task[],
   meetings: Meeting[],
   settings: Settings,
+  date?: Date,
 ): ScheduledDay {
   const { workStart, workEnd, breakMinutes } = settings;
   const workStartMins = toMinutes(workStart);
@@ -39,16 +87,30 @@ export function buildSchedule(
     meeting: m,
   }));
 
-  // Compute mutable free intervals
-  const freeIntervals: Array<{ start: number; end: number }> = [];
-  let cursor = workStartMins;
-  for (const m of normalized) {
-    const mStart = toMinutes(m.start);
-    const mEnd = toMinutes(m.end);
-    if (mStart > cursor) freeIntervals.push({ start: cursor, end: mStart });
-    cursor = Math.max(cursor, mEnd);
+  // Completed sessions for THIS date render in place and occupy their time
+  const dateStr = date ? localISODate(date) : null;
+  const completedSlots: TimeSlot[] = [];
+  if (dateStr) {
+    for (const task of tasks) {
+      for (const cs of task.completedSessions ?? []) {
+        if (cs.date !== dateStr) continue;
+        completedSlots.push({
+          start: cs.start,
+          end: cs.end,
+          type: 'task',
+          task,
+          completed: true,
+        });
+      }
+    }
   }
-  if (cursor < workEndMins) freeIntervals.push({ start: cursor, end: workEndMins });
+
+  // Free intervals must avoid both meetings and already-completed sessions
+  const busy = [
+    ...normalized.map((m) => ({ start: toMinutes(m.start), end: toMinutes(m.end) })),
+    ...completedSlots.map((s) => ({ start: toMinutes(s.start), end: toMinutes(s.end) })),
+  ];
+  const freeIntervals = computeFreeIntervals(busy, workStartMins, workEndMins);
 
   // Sort tasks: high → medium → low, then by creation date
   const priorityOrder = { high: 0, medium: 1, low: 2 };
@@ -73,7 +135,8 @@ export function buildSchedule(
 
   for (const task of activeTasks) {
     const { minSessionMinutes, maxSessionMinutes, maxSessionsPerDay } = task;
-    let remaining = task.estimatedMinutes;
+    const pool = Math.max(0, task.estimatedMinutes - totalCompletedMinutes(task));
+    let remaining = pool;
     let sessionsPlaced = 0;
 
     for (let i = 0; i < freeIntervals.length; i++) {
@@ -92,20 +155,24 @@ export function buildSchedule(
         const sessionSize = Math.min(remaining, maxSessionMinutes, available);
         if (sessionSize < minSessionMinutes) break;
 
+        // Ensure the session doesn't extend past workEnd
+        const sessionEnd = interval.start + sessionSize;
+        if (sessionEnd > workEndMins) break;
+
         sessionsPlaced++;
         rawTaskSlots.push({
           taskId: task.id,
           start: interval.start,
-          end: interval.start + sessionSize,
+          end: sessionEnd,
           sessionIndex: sessionsPlaced,
         });
 
-        interval.start += sessionSize + breakMinutes;
+        interval.start = sessionEnd + breakMinutes;
         remaining -= sessionSize;
       }
     }
 
-    const scheduledMinutes = task.estimatedMinutes - remaining;
+    const scheduledMinutes = pool - remaining;
     if (remaining > 0) {
       unscheduled.push({ task, scheduledMinutes, remainingMinutes: remaining });
     }
@@ -127,7 +194,7 @@ export function buildSchedule(
     sessionTotal: sessionCountByTask[s.taskId],
   }));
 
-  const allSlots: TimeSlot[] = [...meetingSlots, ...taskSlots].sort(
+  const allSlots: TimeSlot[] = [...meetingSlots, ...completedSlots, ...taskSlots].sort(
     (a, b) => toMinutes(a.start) - toMinutes(b.start),
   );
 
@@ -162,7 +229,7 @@ export function getScheduleForDate(
   }
 
   if (target.getTime() === today.getTime()) {
-    return buildSchedule(allTasks, getMeetingsFn(targetDate), settings);
+    return buildSchedule(allTasks, getMeetingsFn(targetDate), settings, targetDate);
   }
 
   // Future: cascade day by day from today, carrying remaining work forward
@@ -170,7 +237,7 @@ export function getScheduleForDate(
 
   const cursor = new Date(today);
   while (toMidnight(cursor) < target) {
-    const daySchedule = buildSchedule(carryTasks, getMeetingsFn(cursor), settings);
+    const daySchedule = buildSchedule(carryTasks, getMeetingsFn(cursor), settings, cursor);
 
     // Build a set of task IDs that were fully placed (no remaining minutes)
     const unscheduledIds = new Set(daySchedule.unscheduled.map((u) => u.task.id));
@@ -186,6 +253,8 @@ export function getScheduleForDate(
       ...daySchedule.unscheduled.map(({ task, remainingMinutes }) => ({
         ...task,
         estimatedMinutes: remainingMinutes,
+        completedMinutes: 0,
+        completedSessions: [],
       })),
       // Never placed at all (e.g. minSession too large for any free slot that day)
       ...carryTasks.filter(
@@ -196,5 +265,5 @@ export function getScheduleForDate(
     cursor.setDate(cursor.getDate() + 1);
   }
 
-  return buildSchedule(carryTasks, getMeetingsFn(targetDate), settings);
+  return buildSchedule(carryTasks, getMeetingsFn(targetDate), settings, targetDate);
 }

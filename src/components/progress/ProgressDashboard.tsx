@@ -21,7 +21,11 @@ export default function ProgressDashboard() {
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
 
   const totalMins = tasks.reduce((sum, t) => sum + t.estimatedMinutes, 0);
-  const doneMins = tasks.filter((t) => t.status === 'done').reduce((sum, t) => sum + t.estimatedMinutes, 0);
+  const doneMins = tasks.reduce(
+    (sum, t) =>
+      sum + (t.status === 'done' ? t.estimatedMinutes : Math.min(t.completedMinutes ?? 0, t.estimatedMinutes)),
+    0,
+  );
 
   const priorities: Priority[] = ['high', 'medium', 'low'];
 
