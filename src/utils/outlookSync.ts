@@ -97,8 +97,9 @@ export async function syncAllTasksToOutlook(
 
   console.log(`[syncAllTasksToOutlook] Days needed: ${daysNeeded.length}`, daysNeeded.map(d => d.toISOString().split('T')[0]));
 
+  // No active tasks: still clear any existing Task Planner meetings from Outlook
   if (daysNeeded.length === 0) {
-    throw new Error('No active tasks to sync');
+    return postMeetingsSync([]);
   }
 
   const allMeetings: OutlookMeeting[] = [];
@@ -134,11 +135,20 @@ export async function syncAllTasksToOutlook(
 
   console.log(`[syncAllTasksToOutlook] Total meetings to sync: ${allMeetings.length}`, allMeetings.map(m => `${m.title} on ${m.date}`));
 
+  return postMeetingsSync(allMeetings);
+}
+
+/**
+ * POST a set of meetings to the companion sync endpoint.
+ * The companion deletes ALL existing "[Task Planner]" meetings first, then
+ * creates the provided ones — so an empty array simply clears them.
+ */
+async function postMeetingsSync(meetings: OutlookMeeting[], dates?: string[]): Promise<any> {
   try {
     const response = await fetch('http://localhost:3001/api/meetings/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ meetings: allMeetings }),
+      body: JSON.stringify(dates ? { meetings, dates } : { meetings }),
     });
 
     if (!response.ok) {
@@ -163,24 +173,6 @@ export async function syncAllTasksToOutlook(
  */
 export async function syncTasksToOutlook(slots: TimeSlot[], date: string): Promise<any> {
   const meetings = extractTaskMeetings(slots, date);
-
-  try {
-    const response = await fetch('http://localhost:3001/api/meetings/sync', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ meetings }),
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || `Sync failed with status ${response.status}`);
-    }
-
-    return await response.json();
-  } catch (err) {
-    if (err instanceof Error && err.message.includes('Failed to fetch')) {
-      throw new Error('Outlook companion server is not running. Start it with: npm start (in companion directory)');
-    }
-    throw err;
-  }
+  // Scope deletion to just this day so other days' meetings are preserved
+  return postMeetingsSync(meetings, [date]);
 }

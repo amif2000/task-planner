@@ -113,7 +113,8 @@ function readOutlookMeetings(rangeStart, rangeEnd) {
 /**
  * Delete all meetings with the Task Planner prefix
  */
-function deleteTaskPlannerMeetings() {
+function deleteTaskPlannerMeetings(dates) {
+  const dateFilter = Array.isArray(dates) && dates.length > 0 ? new Set(dates) : null;
   const winax = require('winax');
   const outlook = new winax.Object('Outlook.Application');
   const ns = outlook.GetNamespace('MAPI');
@@ -132,6 +133,11 @@ function deleteTaskPlannerMeetings() {
         const item = items.Item(i);
         const subject = String(item.Subject || '');
         if (subject.startsWith(MEETING_PREFIX)) {
+          // When a date filter is supplied, only delete meetings on those dates
+          if (dateFilter) {
+            const startDate = toISODate(new Date(item.Start.toString()));
+            if (!dateFilter.has(startDate)) continue;
+          }
           toDelete.push(item);
         }
       } catch {
@@ -349,14 +355,16 @@ app.post('/api/refresh', (_req, res) => {
  */
 app.post('/api/meetings/sync', (req, res) => {
   try {
-    const { meetings } = req.body || {};
+    const { meetings, dates } = req.body || {};
 
     if (!Array.isArray(meetings)) {
       return res.status(400).json({ error: 'Body must contain "meetings" array' });
     }
 
-    // Delete all existing Task Planner meetings
-    const deletedCount = deleteTaskPlannerMeetings();
+    // Delete existing Task Planner meetings. When "dates" is provided, only
+    // meetings on those days are removed (so a single-day sync leaves other
+    // days untouched). Omit "dates" to clear all Task Planner meetings.
+    const deletedCount = deleteTaskPlannerMeetings(Array.isArray(dates) ? dates : undefined);
 
     // Create new meetings
     const created = [];

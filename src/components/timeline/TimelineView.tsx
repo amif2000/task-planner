@@ -121,9 +121,9 @@ export default function TimelineView() {
             <div className="flex items-center gap-1">
               <button
                 onClick={handleSyncToOutlook}
-                disabled={isSyncing || schedule.slots.filter((s) => s.type === 'task').length === 0}
+                disabled={isSyncing}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-full bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                title="Sync today's task sessions to Outlook"
+                title="Sync today's task sessions to Outlook (clears old ones first)"
               >
                 {isSyncing ? (
                   <>
@@ -137,9 +137,9 @@ export default function TimelineView() {
               </button>
               <button
                 onClick={handleSyncAllDays}
-                disabled={isSyncing || tasks.filter((t) => t.status !== 'done').length === 0}
+                disabled={isSyncing}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-full bg-purple-50 border border-purple-200 text-purple-700 hover:bg-purple-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                title="Sync all upcoming days until all tasks are allocated"
+                title="Sync all upcoming days until all tasks are allocated (clears old ones first)"
               >
                 {isSyncing ? (
                   <>
