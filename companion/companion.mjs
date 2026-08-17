@@ -16,7 +16,7 @@ import cors from 'cors';
 
 const require = createRequire(import.meta.url);
 
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
