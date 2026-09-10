@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"npm run dev:api\" \"vite\"",
+    "dev": "concurrently --restart-tries -1 --restart-after exponential \"npm run dev:api\" \"vite\"",
     "dev:api": "node backend/server.mjs",
     "build": "tsc -b && vite build",
     "lint": "eslint .",

@@ -48,15 +48,25 @@ function toOutlookFilter(date) {
 
 const MEETING_PREFIX = '[Task Planner]';
 
-function readOutlookMeetings(rangeStart, rangeEnd) {
+let outlookSession;
+
+function getOutlookSession() {
+  if (outlookSession) return outlookSession;
+
   const winax = require('winax');
+  // Attach to the running Outlook instance when possible. Creating a new COM
+  // application for every calendar operation eventually fails with CreateInstance.
+  const outlook = new winax.Object('Outlook.Application', { activate: true });
+  const namespace = outlook.GetNamespace('MAPI');
+  const calendar = namespace.GetDefaultFolder(9); // 9 = olFolderCalendar
+  outlookSession = { outlook, namespace, calendar };
+  return outlookSession;
+}
 
-  // This will launch Outlook silently if it isn't already running
-  const outlook = new winax.Object('Outlook.Application');
-  const ns = outlook.GetNamespace('MAPI');
-  const calFolder = ns.GetDefaultFolder(9); // 9 = olFolderCalendar
+function readOutlookMeetings(rangeStart, rangeEnd) {
+  const { calendar } = getOutlookSession();
 
-  const items = calFolder.Items;
+  const items = calendar.Items;
   // For recurrence expansion, the required order is:
   //   1. Sort by [Start]
   //   2. Set IncludeRecurrences = true
@@ -115,12 +125,9 @@ function readOutlookMeetings(rangeStart, rangeEnd) {
  */
 function deleteTaskPlannerMeetings(dates) {
   const dateFilter = Array.isArray(dates) && dates.length > 0 ? new Set(dates) : null;
-  const winax = require('winax');
-  const outlook = new winax.Object('Outlook.Application');
-  const ns = outlook.GetNamespace('MAPI');
-  const calFolder = ns.GetDefaultFolder(9); // 9 = olFolderCalendar
+  const { calendar } = getOutlookSession();
 
-  const items = calFolder.Items;
+  const items = calendar.Items;
   items.Sort('[Start]');
 
   try {
@@ -207,13 +214,10 @@ function ensureCategory(ns, name, color) {
  * @returns {object} Created meeting info
  */
 function createOutlookMeeting(title, date, startTime, endTime, priority) {
-  const winax = require('winax');
-  const outlook = new winax.Object('Outlook.Application');
-  const ns = outlook.GetNamespace('MAPI');
-  const calFolder = ns.GetDefaultFolder(9); // 9 = olFolderCalendar
+  const { namespace, calendar } = getOutlookSession();
 
   try {
-    const meeting = calFolder.Items.Add(1); // 1 = olAppointmentItem
+    const meeting = calendar.Items.Add(1); // 1 = olAppointmentItem
 
     // Parse date and time
     const [year, month, day] = date.split('-').map(Number);
@@ -236,7 +240,7 @@ function createOutlookMeeting(title, date, startTime, endTime, priority) {
     // Assign a color category matching the GUI priority color
     const cat = PRIORITY_CATEGORIES[priority];
     if (cat) {
-      ensureCategory(ns, cat.name, cat.color);
+      ensureCategory(namespace, cat.name, cat.color);
       meeting.Categories = cat.name;
     }
 
@@ -261,9 +265,10 @@ let cachedMeetings = [];
 let lastFetchedAt = 0;
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 let refreshInProgress = false;
+let lastRefreshError = null;
 
 function refreshCache() {
-  if (refreshInProgress) return;
+  if (refreshInProgress) return false;
   refreshInProgress = true;
   const start = new Date();
   start.setDate(start.getDate() - 1); // yesterday for safety
@@ -273,11 +278,15 @@ function refreshCache() {
   try {
     cachedMeetings = readOutlookMeetings(start, end);
     lastFetchedAt = Date.now();
+    lastRefreshError = null;
     console.log(
       `[${new Date().toLocaleTimeString()}] Refreshed: ${cachedMeetings.length} meetings cached`,
     );
+    return true;
   } catch (err) {
+    lastRefreshError = err;
     console.error('Failed to refresh Outlook cache:', err.message);
+    return false;
   } finally {
     refreshInProgress = false;
   }
@@ -315,6 +324,16 @@ app.get('/api/health', (_req, res) => {
  */
 app.get('/api/meetings', (req, res) => {
   try {
+    if (lastFetchedAt === 0) {
+      if (lastRefreshError) {
+        return res.status(503).json({ error: lastRefreshError.message });
+      }
+      if (!refreshInProgress) {
+        setImmediate(refreshCache);
+      }
+      return res.status(202).json({ status: 'loading' });
+    }
+
     const all = getMeetings();
     const { date, start, end } = req.query;
 
@@ -335,7 +354,14 @@ app.get('/api/meetings', (req, res) => {
 /** Force a cache refresh */
 app.post('/api/refresh', (_req, res) => {
   try {
-    refreshCache();
+    if (refreshInProgress) {
+      return res.status(202).json({ status: 'loading' });
+    }
+    if (!refreshCache()) {
+      return res.status(503).json({
+        error: lastRefreshError?.message ?? 'Failed to refresh Outlook meetings',
+      });
+    }
     res.json({ refreshed: true, count: cachedMeetings.length });
   } catch (err) {
     res.status(500).json({ error: err.message });

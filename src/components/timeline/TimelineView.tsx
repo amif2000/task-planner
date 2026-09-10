@@ -21,37 +21,53 @@ export default function TimelineView() {
   const { settings } = useSettingsStore();
   const { selectedDate } = useDateStore();
   const { workStart, workEnd } = settings;
+  const selectedDateKey = toLocalISODate(selectedDate);
 
   const [source, setSource] = useState<MeetingSource>('mock');
-  const [meetingsReady, setMeetingsReady] = useState(false);
+  const [readyDateKey, setReadyDateKey] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
+  const [calendarError, setCalendarError] = useState<string | null>(null);
   // Bumped after every successful meeting refresh to force schedule recompute
   const [refreshTick, setRefreshTick] = useState(0);
+  const meetingsReady = readyDateKey === selectedDateKey;
 
   // Refresh meetings from the companion, then trigger a schedule recompute
-  const runRefresh = useCallback(() => {
+  const runRefresh = useCallback((force = false) => {
     setIsRefreshing(true);
-    return refreshMeetings(selectedDate)
+    setCalendarError(null);
+    return refreshMeetings(selectedDate, 14, force)
       .then((src) => {
         setSource(src);
         setLastSyncedAt(new Date());
         setRefreshTick((t) => t + 1);
+        return true;
+      })
+      .catch((error) => {
+        setCalendarError(error instanceof Error ? error.message : 'Failed to load Outlook meetings');
+        return false;
       })
       .finally(() => setIsRefreshing(false));
   }, [selectedDate]);
 
   // Fetch / refresh meetings whenever the selected date changes
   useEffect(() => {
-    setMeetingsReady(false);
-    runRefresh().then(() => setMeetingsReady(true));
-  }, [runRefresh]);
+    let cancelled = false;
+    void Promise.resolve()
+      .then(() => runRefresh())
+      .then((loaded) => {
+        if (loaded && !cancelled) setReadyDateKey(selectedDateKey);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [runRefresh, selectedDateKey]);
 
   // Also re-fetch every 60 seconds while the view is open
   useEffect(() => {
-    const id = setInterval(runRefresh, 60 * 1000);
+    const id = setInterval(() => void runRefresh(), 60 * 1000);
     return () => clearInterval(id);
   }, [runRefresh]);
 
@@ -62,12 +78,18 @@ export default function TimelineView() {
   );
 
   const schedule = useMemo(
-    () => getScheduleForDate(tasks, selectedDate, settings, getCachedMeetingsForDate),
+    () => meetingsReady
+      ? getScheduleForDate(tasks, selectedDate, settings, getCachedMeetingsForDate)
+      : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [tasks, selectedDate, settings, meetingsReady, refreshTick],
   );
 
   const handleSyncToOutlook = async () => {
+    if (!schedule) {
+      setSyncStatus({ type: 'error', message: 'Wait for Outlook meetings to finish loading.' });
+      return;
+    }
     setIsSyncing(true);
     setSyncStatus(null);
     try {
@@ -78,7 +100,7 @@ export default function TimelineView() {
         message: `Deleted ${result.deleted} old meetings. Created ${result.created} new meetings.`,
       });
       // Refresh meetings from Outlook after sync (also recomputes schedule)
-      setTimeout(runRefresh, 1000);
+      setTimeout(() => void runRefresh(), 1000);
     } catch (err) {
       setSyncStatus({
         type: 'error',
@@ -90,6 +112,10 @@ export default function TimelineView() {
   };
 
   const handleSyncAllDays = async () => {
+    if (!meetingsReady) {
+      setSyncStatus({ type: 'error', message: 'Wait for Outlook meetings to finish loading.' });
+      return;
+    }
     setIsSyncing(true);
     setSyncStatus(null);
     try {
@@ -99,7 +125,7 @@ export default function TimelineView() {
         message: `Synced across multiple days. Deleted ${result.deleted} old meetings. Created ${result.created} new meetings.`,
       });
       // Refresh meetings from Outlook after sync (also recomputes schedule)
-      setTimeout(runRefresh, 1000);
+      setTimeout(() => void runRefresh(), 1000);
     } catch (err) {
       setSyncStatus({
         type: 'error',
@@ -125,7 +151,7 @@ export default function TimelineView() {
             <div className="flex items-center gap-1">
               <button
                 onClick={handleSyncToOutlook}
-                disabled={isSyncing}
+                disabled={isSyncing || !meetingsReady}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-full bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 title="Sync today's task sessions to Outlook (clears old ones first)"
               >
@@ -141,7 +167,7 @@ export default function TimelineView() {
               </button>
               <button
                 onClick={handleSyncAllDays}
-                disabled={isSyncing}
+                disabled={isSyncing || !meetingsReady}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-full bg-purple-50 border border-purple-200 text-purple-700 hover:bg-purple-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 title="Sync all upcoming days until all tasks are allocated (clears old ones first)"
               >
@@ -158,18 +184,28 @@ export default function TimelineView() {
             </div>
             <span
               className={`flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border
-                ${source === 'outlook'
+                ${!meetingsReady
+                  ? 'text-blue-700 bg-blue-50 border-blue-200'
+                  : source === 'outlook'
                   ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
                   : 'text-slate-500 bg-slate-100 border-slate-200'}`}
-              title={source === 'outlook' ? 'Live Outlook calendar' : 'Mock meeting data — start the companion for live data'}
+              title={!meetingsReady
+                ? 'Waiting for calendar data before scheduling'
+                : source === 'outlook'
+                  ? 'Live Outlook calendar'
+                  : 'Mock meeting data — start the companion for live data'}
             >
-              {source === 'outlook'
+              {!meetingsReady
+                ? calendarError
+                  ? <><WifiOff size={11} /> Outlook unavailable</>
+                  : <><Loader size={11} className="animate-spin" /> Loading calendar…</>
+                : source === 'outlook'
                 ? <><Wifi size={11} /> Outlook</>
                 : <><WifiOff size={11} /> Mock data</>}
             </span>
             {/* Refresh indicator + last-synced timestamp */}
             <button
-              onClick={runRefresh}
+              onClick={() => void runRefresh()}
               disabled={isRefreshing}
               className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-600 disabled:cursor-default transition-colors"
               title="Refresh meetings from Outlook now"
@@ -216,7 +252,7 @@ export default function TimelineView() {
           })}
 
           <div className="absolute inset-0 ml-14">
-            {schedule.slots.map((slot, i) => {
+            {schedule?.slots.map((slot, i) => {
               if (slot.type === 'meeting' && slot.meeting) {
                 return (
                   <MeetingBlock
@@ -246,9 +282,28 @@ export default function TimelineView() {
               return null;
             })}
           </div>
+
+          {!meetingsReady && (
+            <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/85 backdrop-blur-[1px]">
+              <div className="flex flex-col items-center gap-2 text-sm font-medium text-slate-600">
+                {calendarError
+                  ? <WifiOff size={24} className="text-red-500" />
+                  : <Loader size={24} className="animate-spin text-blue-500" />}
+                <span>{calendarError ?? 'Loading Outlook meetings before scheduling…'}</span>
+                {calendarError && (
+                  <button
+                    onClick={() => void runRefresh(true)}
+                    className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs text-blue-700 hover:bg-blue-100"
+                  >
+                    Retry
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
-        {dayMeetings.length === 0 && (
+        {meetingsReady && dayMeetings.length === 0 && (
           <p className="text-sm text-slate-400 mt-3 flex items-center gap-1">
             <CalendarX size={14} /> No meetings this day
           </p>
@@ -258,7 +313,11 @@ export default function TimelineView() {
       {/* Side panel */}
       <div className="w-64 shrink-0">
         <h2 className="text-base font-semibold text-slate-700 mb-4">Unscheduled</h2>
-        {schedule.unscheduled.length === 0 ? (
+        {!schedule ? (
+          <p className="flex items-center gap-2 text-sm text-slate-400">
+            <Loader size={14} className="animate-spin" /> Waiting for meetings…
+          </p>
+        ) : schedule.unscheduled.length === 0 ? (
           <p className="text-sm text-slate-400">All tasks fit in the day 🎉</p>
         ) : (
           <ul className="flex flex-col gap-2">
@@ -278,7 +337,9 @@ export default function TimelineView() {
 
         <div className="mt-6">
           <h3 className="text-sm font-semibold text-slate-600 mb-2">Meetings</h3>
-          {dayMeetings.length === 0 ? (
+          {!meetingsReady ? (
+            <p className="text-xs text-slate-400">Loading from calendar…</p>
+          ) : dayMeetings.length === 0 ? (
             <p className="text-xs text-slate-400">None</p>
           ) : (
             <ul className="flex flex-col gap-1.5">
