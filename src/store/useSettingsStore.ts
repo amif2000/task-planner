@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { Settings } from '../types';
 import { DEFAULT_SETTINGS } from '../types';
+import { getStorageMode } from '../storage/storageMode';
 
 interface SettingsStore {
   settings: Settings;
@@ -58,6 +59,10 @@ function parsePersistedSettings(raw: string | null): Settings | null {
   }
 }
 
+function writeLocalSettings(settings: Settings): void {
+  localStorage.setItem(SETTINGS_LOCAL_STORAGE_KEY, JSON.stringify({ state: { settings } }));
+}
+
 export const useSettingsStore = create<SettingsStore>((set, get) => ({
   settings: DEFAULT_SETTINGS,
   isLoading: false,
@@ -70,6 +75,16 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     if (get().initialized || get().isLoading) return;
     set({ isLoading: true, error: null });
     try {
+      if (await getStorageMode() === 'local') {
+        const settings = parsePersistedSettings(localStorage.getItem(SETTINGS_LOCAL_STORAGE_KEY));
+        set({
+          settings: settings ? { ...DEFAULT_SETTINGS, ...settings } : DEFAULT_SETTINGS,
+          initialized: true,
+          isLoading: false,
+          error: null,
+        });
+        return;
+      }
       const settings = await request<Settings>('/api/settings');
       const localSettings = parsePersistedSettings(localStorage.getItem(SETTINGS_LOCAL_STORAGE_KEY));
       if (localSettings) {
@@ -106,6 +121,11 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const payload = { ...get().settings, ...updates };
+      if (await getStorageMode() === 'local') {
+        writeLocalSettings(payload);
+        set({ settings: payload, isLoading: false });
+        return;
+      }
       const settings = await request<Settings>('/api/settings', {
         method: 'PUT',
         body: JSON.stringify(payload),
@@ -120,6 +140,11 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   resetSettings: async () => {
     set({ isLoading: true, error: null });
     try {
+      if (await getStorageMode() === 'local') {
+        writeLocalSettings(DEFAULT_SETTINGS);
+        set({ settings: DEFAULT_SETTINGS, isLoading: false });
+        return;
+      }
       const settings = await request<Settings>('/api/settings', {
         method: 'PUT',
         body: JSON.stringify(DEFAULT_SETTINGS),
@@ -142,6 +167,12 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       } else {
         const d = new Date(date);
         next[date] = !isDefaultWorkingDay(d);
+      }
+      if (await getStorageMode() === 'local') {
+        const settings = { ...get().settings, dayOverrides: next };
+        writeLocalSettings(settings);
+        set({ settings, isLoading: false });
+        return;
       }
       const settings = await request<Settings>('/api/settings', {
         method: 'PUT',

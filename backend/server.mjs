@@ -9,11 +9,16 @@ dotenv.config();
 
 const PORT = Number(process.env.API_PORT || 3002);
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
+const STORAGE_MODE = (process.env.STORAGE_MODE || 'mongodb').toLowerCase();
 const DB_NAME = process.env.MONGODB_DB_NAME || 'task_planner';
 const COLLECTION_NAME = process.env.MONGODB_COLLECTION_NAME || 'tasks';
 const SETTINGS_COLLECTION_NAME = process.env.MONGODB_SETTINGS_COLLECTION_NAME || 'settings';
 const ALLOW_INVALID_CERTIFICATES = process.env.MONGODB_TLS_ALLOW_INVALID_CERTIFICATES === 'true';
 const TASKS_LOCAL_STORAGE_KEY = 'task-planner-tasks';
+
+if (!['mongodb', 'local'].includes(STORAGE_MODE)) {
+  throw new Error(`Invalid STORAGE_MODE "${STORAGE_MODE}". Expected "mongodb" or "local".`);
+}
 
 const STATUS_CYCLE = {
   'todo': 'in-progress',
@@ -62,38 +67,54 @@ function normalizeTask(task, now = new Date().toISOString()) {
   };
 }
 
-if (ALLOW_INVALID_CERTIFICATES) {
-  console.warn('WARNING: MongoDB TLS certificate validation is disabled.');
-}
-const client = new MongoClient(buildMongoUri(), {
-  tlsAllowInvalidCertificates: ALLOW_INVALID_CERTIFICATES,
-});
-await client.connect();
-const db = client.db(DB_NAME);
-const collection = db.collection(COLLECTION_NAME);
-const settingsCollection = db.collection(SETTINGS_COLLECTION_NAME);
-await collection.createIndex({ id: 1 }, { unique: true });
-await settingsCollection.createIndex({ id: 1 }, { unique: true });
-await settingsCollection.updateOne(
-  { id: 'global' },
-  {
-    $setOnInsert: {
-      id: 'global',
-      workStart: '08:00',
-      workEnd: '17:00',
-      breakMinutes: 10,
-      dayOverrides: {},
+let collection;
+let settingsCollection;
+
+if (STORAGE_MODE === 'mongodb') {
+  if (ALLOW_INVALID_CERTIFICATES) {
+    console.warn('WARNING: MongoDB TLS certificate validation is disabled.');
+  }
+  const client = new MongoClient(buildMongoUri(), {
+    tlsAllowInvalidCertificates: ALLOW_INVALID_CERTIFICATES,
+  });
+  await client.connect();
+  const db = client.db(DB_NAME);
+  collection = db.collection(COLLECTION_NAME);
+  settingsCollection = db.collection(SETTINGS_COLLECTION_NAME);
+  await collection.createIndex({ id: 1 }, { unique: true });
+  await settingsCollection.createIndex({ id: 1 }, { unique: true });
+  await settingsCollection.updateOne(
+    { id: 'global' },
+    {
+      $setOnInsert: {
+        id: 'global',
+        workStart: '08:00',
+        workEnd: '17:00',
+        breakMinutes: 10,
+        dayOverrides: {},
+      },
     },
-  },
-  { upsert: true },
-);
+    { upsert: true },
+  );
+}
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
 app.use(cors({ origin: [CLIENT_ORIGIN, 'http://127.0.0.1:5173'] }));
 
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', source: 'task-planner-api' });
+  res.json({ status: 'ok', source: 'task-planner-api', storageMode: STORAGE_MODE });
+});
+
+app.get('/api/config', (_req, res) => {
+  res.json({ storageMode: STORAGE_MODE });
+});
+
+app.use(['/api/tasks', '/api/settings'], (_req, res, next) => {
+  if (STORAGE_MODE === 'local') {
+    return res.status(503).json({ error: 'Task API is disabled while STORAGE_MODE=local' });
+  }
+  next();
 });
 
 app.get('/api/tasks', async (_req, res) => {
@@ -247,5 +268,5 @@ app.post('/api/tasks/load-seed', async (_req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Task Planner API listening on http://localhost:${PORT}`);
+  console.log(`Task Planner API listening on http://localhost:${PORT} (storage: ${STORAGE_MODE})`);
 });

@@ -41,7 +41,7 @@ You were given a single deployment archive: **`task-planner-deploy.zip`**.
 3. Open the extracted folder — it contains the source, the `companion/` folder,
    `package.json`, the `setup.ps1` / `start.bat` / `start.mjs` scripts, and this
    document. It also contains `backend/server.mjs`, which initializes the MongoDB
-   task and settings collections when the launcher starts.
+   task and settings collections when MongoDB storage is selected.
 
 The archive intentionally **excludes** the generated folders — they are rebuilt
 on the target during setup:
@@ -130,14 +130,17 @@ Press **Ctrl+C** in the console (or close the window) to stop all services.
 
 ## 6. Configuration
 
-Copy `.env.example` to `.env`, then replace the MongoDB Atlas placeholders:
+Copy `.env.example` to `.env`:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-See the variable reference in `README.md`. Keep `.env` private; it is ignored
-by Git and excluded from the deployment archive.
+Set `STORAGE_MODE=mongodb` for shared Atlas persistence, or
+`STORAGE_MODE=local` to keep tasks and settings in the current browser profile.
+MongoDB credentials are only required for `mongodb` mode. See the variable
+reference in `README.md`. Keep `.env` private; it is ignored by Git and excluded
+from the deployment archive.
 
 If a trusted corporate proxy causes `self-signed certificate in certificate
 chain`, set `MONGODB_TLS_ALLOW_INVALID_CERTIFICATES=true` in `.env`. This

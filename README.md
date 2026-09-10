@@ -14,8 +14,8 @@ npm install
 npm run dev
 ```
 
-## MongoDB Atlas backend setup
-Copy the sample file and replace the MongoDB placeholders:
+## Storage setup
+Copy the sample file:
 
 ```powershell
 Copy-Item .env.example .env
@@ -26,6 +26,7 @@ variables without containing real credentials:
 
 | Variable | Purpose | Default |
 |---|---|---|
+| `STORAGE_MODE` | Persistence provider: `mongodb` or browser `local` storage | `mongodb` |
 | `MONGODB_ATLAS_URI` | Complete Atlas connection URI (recommended) | Required unless split credentials are used |
 | `MONGODB_USERNAME`, `MONGODB_PASSWORD`, `MONGODB_URI` | Alternative split Atlas credentials | None |
 | `MONGODB_DB_NAME` | Database name | `task_planner` |
@@ -37,6 +38,10 @@ variables without containing real credentials:
 | `VITE_API_BASE_URL` | Backend URL embedded into the frontend | `http://localhost:3002` |
 | `UI_PORT` | Production preview UI port | `4173` |
 | `COMPANION_PORT` | Outlook companion port | `3001` |
+
+For browser-only persistence, set `STORAGE_MODE=local`. MongoDB credentials are
+not required in this mode. Tasks and settings remain in the current browser
+profile and are not shared with other browsers or computers.
 
 If Atlas fails with `self-signed certificate in certificate chain`, prefer
 installing your organization's CA certificate. As a temporary workaround, add
@@ -53,4 +58,6 @@ MONGODB_TLS_ALLOW_INVALID_CERTIFICATES=true
 - `start.bat` - runs the production UI, backend, and Outlook companion
 
 ## Local storage migration
-On first load, the frontend imports legacy task and settings data from localStorage into MongoDB. The backend creates the `settings` collection and its global settings document when it starts.
+When `STORAGE_MODE=mongodb`, the frontend imports legacy task and settings data
+from localStorage into MongoDB on first load. In `local` mode, that data remains
+in the browser.
