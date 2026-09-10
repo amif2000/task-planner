@@ -82,10 +82,11 @@ export function buildSchedule(
     + (now.getSeconds() > 0 || now.getMilliseconds() > 0 ? 1 : 0);
   const planningStartMins = isToday ? Math.max(workStartMins, currentMinute) : workStartMins;
 
-  const normalized = normalizeMeetings(meetings);
+  const sortedMeetings = [...meetings].sort((a, b) => toMinutes(a.start) - toMinutes(b.start));
+  const normalizedBusyMeetings = normalizeMeetings(meetings);
 
-  // Build meeting slots for display
-  const meetingSlots: TimeSlot[] = normalized.map((m) => ({
+  // Keep individual meetings visible even when their busy intervals overlap or touch.
+  const meetingSlots: TimeSlot[] = sortedMeetings.map((m) => ({
     start: m.start,
     end: m.end,
     type: 'meeting',
@@ -112,7 +113,7 @@ export function buildSchedule(
 
   // Free intervals must avoid both meetings and already-completed sessions
   const busy = [
-    ...normalized.map((m) => ({ start: toMinutes(m.start), end: toMinutes(m.end) })),
+    ...normalizedBusyMeetings.map((m) => ({ start: toMinutes(m.start), end: toMinutes(m.end) })),
     ...completedSlots.map((s) => ({ start: toMinutes(s.start), end: toMinutes(s.end) })),
   ];
   const freeIntervals = computeFreeIntervals(busy, planningStartMins, workEndMins);

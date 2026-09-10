@@ -8,11 +8,13 @@ import {
   type MeetingSource,
 } from '../../data/meetings';
 import { getScheduleForDate } from '../../utils/scheduler';
-import { getHourMarks, toMinutes, formatTime } from '../../utils/timeUtils';
+import { getHourMarks, toMinutes, toTimeString, formatTime } from '../../utils/timeUtils';
 import { syncTasksToOutlook, syncAllTasksToOutlook, toLocalISODate } from '../../utils/outlookSync';
 import MeetingBlock from './MeetingBlock';
 import TaskBlock from './TaskBlock';
 import { CalendarX, Wifi, WifiOff, Upload, Loader, Calendar, RefreshCw } from 'lucide-react';
+
+const TIMELINE_PADDING_MINUTES = 60;
 
 export default function TimelineView() {
   const tasks = useTaskStore((s) => s.tasks);
@@ -108,8 +110,10 @@ export default function TimelineView() {
     }
   };
 
-  const hourMarks = getHourMarks(workStart, workEnd);
-  const totalMins = toMinutes(workEnd) - toMinutes(workStart);
+  const timelineStart = toTimeString(Math.max(0, toMinutes(workStart) - TIMELINE_PADDING_MINUTES));
+  const timelineEnd = toTimeString(Math.min(24 * 60, toMinutes(workEnd) + TIMELINE_PADDING_MINUTES));
+  const hourMarks = getHourMarks(timelineStart, timelineEnd);
+  const totalMins = toMinutes(timelineEnd) - toMinutes(timelineStart);
 
   return (
     <div className="flex gap-6 h-full">
@@ -197,7 +201,7 @@ export default function TimelineView() {
           style={{ height: '600px' }}
         >
           {hourMarks.map((mark) => {
-            const top = ((toMinutes(mark) - toMinutes(workStart)) / totalMins) * 100;
+            const top = ((toMinutes(mark) - toMinutes(timelineStart)) / totalMins) * 100;
             return (
               <div
                 key={mark}
@@ -218,8 +222,8 @@ export default function TimelineView() {
                   <MeetingBlock
                     key={`m-${slot.meeting.id}-${i}`}
                     meeting={slot.meeting}
-                    workStart={workStart}
-                    workEnd={workEnd}
+                    timelineStart={timelineStart}
+                    timelineEnd={timelineEnd}
                   />
                 );
               }
@@ -230,8 +234,8 @@ export default function TimelineView() {
                     task={slot.task}
                     start={slot.start}
                     end={slot.end}
-                    workStart={workStart}
-                    workEnd={workEnd}
+                    timelineStart={timelineStart}
+                    timelineEnd={timelineEnd}
                     sessionIndex={slot.sessionIndex}
                     sessionTotal={slot.sessionTotal}
                     completed={slot.completed}

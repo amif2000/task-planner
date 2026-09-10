@@ -6,8 +6,8 @@ interface TaskBlockProps {
   task: Task;
   start: string;
   end: string;
-  workStart: string;
-  workEnd: string;
+  timelineStart: string;
+  timelineEnd: string;
   sessionIndex?: number;
   sessionTotal?: number;
   /** True when this block is an already-completed session */
@@ -28,11 +28,11 @@ const STATUS_ICON: Record<string, string> = {
   'done': '●',
 };
 
-export default function TaskBlock({ task, start, end, workStart, workEnd, sessionIndex, sessionTotal, completed, date }: TaskBlockProps) {
+export default function TaskBlock({ task, start, end, timelineStart, timelineEnd, sessionIndex, sessionTotal, completed, date }: TaskBlockProps) {
   const completeSession = useTaskStore((s) => s.completeSession);
   const uncompleteSession = useTaskStore((s) => s.uncompleteSession);
-  const totalMins = toMinutes(workEnd) - toMinutes(workStart);
-  const top = ((toMinutes(start) - toMinutes(workStart)) / totalMins) * 100;
+  const totalMins = toMinutes(timelineEnd) - toMinutes(timelineStart);
+  const top = ((toMinutes(start) - toMinutes(timelineStart)) / totalMins) * 100;
   const height = ((toMinutes(end) - toMinutes(start)) / totalMins) * 100;
   const durationMins = toMinutes(end) - toMinutes(start);
   const isMultiSession = sessionTotal !== undefined && sessionTotal > 1;
@@ -51,7 +51,7 @@ export default function TaskBlock({ task, start, end, workStart, workEnd, sessio
       className={`absolute left-0 right-0 mx-1 border rounded-md px-2 py-1 overflow-hidden cursor-pointer hover:brightness-95 transition-all
         ${PRIORITY_STYLES[task.priority]}
         ${completed ? 'opacity-70 ring-2 ring-inset ring-green-500/60' : ''}`}
-      style={{ top: `${top}%`, height: `${height}%`, minHeight: '28px' }}
+      style={{ top: `${top}%`, height: `${height}%` }}
       onClick={handleClick}
       title={
         completed
