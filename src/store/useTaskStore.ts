@@ -1,12 +1,14 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-import { v4 as uuidv4 } from 'uuid';
-import type { Task, Priority, TaskStatus } from '../types';
+import type { Task, Priority } from '../types';
 import { TASK_SESSION_DEFAULTS } from '../types';
-import { SEED_TASKS } from '../data/seedTasks';
 
 interface TaskStore {
   tasks: Task[];
+  isLoading: boolean;
+  error: string | null;
+  initialized: boolean;
+  initialize: () => Promise<void>;
+  clearError: () => void;
   addTask: (
     title: string,
     estimatedMinutes: number,
@@ -16,120 +18,230 @@ interface TaskStore {
       maxSessionMinutes?: number;
       maxSessionsPerDay?: number | null;
     },
-  ) => void;
-  updateTask: (id: string, updates: Partial<Omit<Task, 'id' | 'createdAt'>>) => void;
-  deleteTask: (id: string) => void;
-  cycleStatus: (id: string) => void;
-  clearDone: () => void;
-  loadSeedTasks: () => void;
+  ) => Promise<void>;
+  updateTask: (id: string, updates: Partial<Omit<Task, 'id' | 'createdAt'>>) => Promise<void>;
+  deleteTask: (id: string) => Promise<void>;
+  cycleStatus: (id: string) => Promise<void>;
+  clearDone: () => Promise<void>;
+  loadSeedTasks: () => Promise<void>;
   /** Mark a concrete session done — deducts its minutes and keeps it in place on the timeline */
-  completeSession: (id: string, session: { date: string; start: string; end: string; minutes: number }) => void;
+  completeSession: (id: string, session: { date: string; start: string; end: string; minutes: number }) => Promise<void>;
   /** Undo a completed session (identified by date + start time) */
-  uncompleteSession: (id: string, date: string, start: string) => void;
+  uncompleteSession: (id: string, date: string, start: string) => Promise<void>;
   /** Reset logged progress back to zero and status to todo */
-  resetProgress: (id: string) => void;
+  resetProgress: (id: string) => Promise<void>;
 }
 
-const STATUS_CYCLE: Record<TaskStatus, TaskStatus> = {
-  'todo': 'in-progress',
-  'in-progress': 'done',
-  'done': 'todo',
-};
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3002';
+const TASKS_LOCAL_STORAGE_KEY = 'task-planner-tasks';
 
-export const useTaskStore = create<TaskStore>()(
-  persist(
-    (set) => ({
-      tasks: [],
+type TaskPayload = Omit<Task, 'id' | 'createdAt'>;
+type SessionPayload = { date: string; start: string; end: string; minutes: number };
 
-      addTask: (title, estimatedMinutes, priority, sessionOpts = {}) =>
-        set((state) => ({
-          tasks: [
-            ...state.tasks,
-            {
-              id: uuidv4(),
-              title,
-              estimatedMinutes,
-              priority,
-              status: 'todo',
-              createdAt: new Date().toISOString(),
-              minSessionMinutes: sessionOpts.minSessionMinutes ?? TASK_SESSION_DEFAULTS.minSessionMinutes,
-              maxSessionMinutes: sessionOpts.maxSessionMinutes ?? TASK_SESSION_DEFAULTS.maxSessionMinutes,
-              maxSessionsPerDay: sessionOpts.maxSessionsPerDay !== undefined
-                ? sessionOpts.maxSessionsPerDay
-                : TASK_SESSION_DEFAULTS.maxSessionsPerDay,
-              completedMinutes: 0,
-              completedSessions: [],
-            },
-          ],
-        })),
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+    ...init,
+  });
 
-      updateTask: (id, updates) =>
-        set((state) => ({
-          tasks: state.tasks.map((t) => (t.id === id ? { ...t, ...updates } : t)),
-        })),
+  if (!response.ok) {
+    let message = `Request failed (${response.status})`;
+    try {
+      const body = await response.json() as { error?: string };
+      if (body.error) message = body.error;
+    } catch {
+      // Keep generic message when response body is not JSON.
+    }
+    throw new Error(message);
+  }
 
-      deleteTask: (id) =>
-        set((state) => ({ tasks: state.tasks.filter((t) => t.id !== id) })),
+  if (response.status === 204) {
+    return undefined as T;
+  }
+  return response.json() as Promise<T>;
+}
 
-      cycleStatus: (id) =>
-        set((state) => ({
-          tasks: state.tasks.map((t) =>
-            t.id === id ? { ...t, status: STATUS_CYCLE[t.status] } : t,
-          ),
-        })),
+function parsePersistedTasks(raw: string | null): Task[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as { state?: { tasks?: Task[] } };
+    return Array.isArray(parsed?.state?.tasks) ? parsed.state.tasks : [];
+  } catch {
+    return [];
+  }
+}
 
-      clearDone: () =>
-        set((state) => ({ tasks: state.tasks.filter((t) => t.status !== 'done') })),
+export const useTaskStore = create<TaskStore>((set, get) => ({
+  tasks: [],
+  isLoading: false,
+  error: null,
+  initialized: false,
+  clearError: () => set({ error: null }),
+  initialize: async () => {
+    if (get().initialized || get().isLoading) return;
+    set({ isLoading: true, error: null });
+    try {
+      let tasks = await request<Task[]>('/api/tasks');
+      if (tasks.length === 0) {
+        const localTasks = parsePersistedTasks(localStorage.getItem(TASKS_LOCAL_STORAGE_KEY));
+        if (localTasks.length > 0) {
+          await request<{ imported: number }>('/api/tasks/import-local', {
+            method: 'POST',
+            body: JSON.stringify({ tasks: localTasks }),
+          });
+          localStorage.removeItem(TASKS_LOCAL_STORAGE_KEY);
+          tasks = await request<Task[]>('/api/tasks');
+        }
+      }
+      set({ tasks, initialized: true, isLoading: false, error: null });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load tasks';
+      set({ error: message, isLoading: false });
+    }
+  },
 
-      completeSession: (id, session) =>
-        set((state) => ({
-          tasks: state.tasks.map((t) => {
-            if (t.id !== id) return t;
-            const existing = t.completedSessions ?? [];
-            // Avoid duplicates for the same date+start
-            if (existing.some((s) => s.date === session.date && s.start === session.start)) {
-              return t;
-            }
-            const sessions = [...existing, session];
-            const completedMinutes = Math.min(
-              t.estimatedMinutes,
-              sessions.reduce((sum, s) => sum + s.minutes, 0),
-            );
-            const status: TaskStatus = completedMinutes >= t.estimatedMinutes ? 'done' : 'in-progress';
-            return { ...t, completedSessions: sessions, completedMinutes, status };
-          }),
-        })),
+  addTask: async (title, estimatedMinutes, priority, sessionOpts = {}) => {
+    set({ isLoading: true, error: null });
+    try {
+      const payload: TaskPayload = {
+        title,
+        estimatedMinutes,
+        priority,
+        status: 'todo',
+        minSessionMinutes: sessionOpts.minSessionMinutes ?? TASK_SESSION_DEFAULTS.minSessionMinutes,
+        maxSessionMinutes: sessionOpts.maxSessionMinutes ?? TASK_SESSION_DEFAULTS.maxSessionMinutes,
+        maxSessionsPerDay: sessionOpts.maxSessionsPerDay !== undefined
+          ? sessionOpts.maxSessionsPerDay
+          : TASK_SESSION_DEFAULTS.maxSessionsPerDay,
+        completedMinutes: 0,
+        completedSessions: [],
+      };
+      const task = await request<Task>('/api/tasks', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      set((state) => ({ tasks: [...state.tasks, task], isLoading: false }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to add task';
+      set({ error: message, isLoading: false });
+    }
+  },
 
-      uncompleteSession: (id, date, start) =>
-        set((state) => ({
-          tasks: state.tasks.map((t) => {
-            if (t.id !== id) return t;
-            const sessions = (t.completedSessions ?? []).filter(
-              (s) => !(s.date === date && s.start === start),
-            );
-            const completedMinutes = sessions.reduce((sum, s) => sum + s.minutes, 0);
-            const status: TaskStatus = completedMinutes <= 0 ? 'todo' : 'in-progress';
-            return { ...t, completedSessions: sessions, completedMinutes, status };
-          }),
-        })),
+  updateTask: async (id, updates) => {
+    set({ isLoading: true, error: null });
+    try {
+      const task = await request<Task>(`/api/tasks/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(updates),
+      });
+      set((state) => ({
+        tasks: state.tasks.map((t) => (t.id === id ? task : t)),
+        isLoading: false,
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to update task';
+      set({ error: message, isLoading: false });
+    }
+  },
 
-      resetProgress: (id) =>
-        set((state) => ({
-          tasks: state.tasks.map((t) =>
-            t.id === id ? { ...t, completedMinutes: 0, completedSessions: [], status: 'todo' } : t,
-          ),
-        })),
+  deleteTask: async (id) => {
+    set({ isLoading: true, error: null });
+    try {
+      await request<void>(`/api/tasks/${id}`, { method: 'DELETE' });
+      set((state) => ({
+        tasks: state.tasks.filter((t) => t.id !== id),
+        isLoading: false,
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to delete task';
+      set({ error: message, isLoading: false });
+    }
+  },
 
-      loadSeedTasks: () =>
-        set({
-          tasks: SEED_TASKS.map((t) => ({
-            ...t,
-            createdAt: new Date().toISOString(),
-            completedMinutes: 0,
-            completedSessions: [],
-          })),
-        }),
-    }),
-    { name: 'task-planner-tasks' },
-  ),
-);
+  cycleStatus: async (id) => {
+    set({ isLoading: true, error: null });
+    try {
+      const task = await request<Task>(`/api/tasks/${id}/cycle-status`, { method: 'POST' });
+      set((state) => ({
+        tasks: state.tasks.map((t) => (t.id === id ? task : t)),
+        isLoading: false,
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to cycle task status';
+      set({ error: message, isLoading: false });
+    }
+  },
+
+  clearDone: async () => {
+    set({ isLoading: true, error: null });
+    try {
+      await request<{ deleted: number }>('/api/tasks/clear-done', { method: 'POST' });
+      set((state) => ({
+        tasks: state.tasks.filter((t) => t.status !== 'done'),
+        isLoading: false,
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to clear done tasks';
+      set({ error: message, isLoading: false });
+    }
+  },
+
+  completeSession: async (id, session: SessionPayload) => {
+    set({ isLoading: true, error: null });
+    try {
+      const task = await request<Task>(`/api/tasks/${id}/complete-session`, {
+        method: 'POST',
+        body: JSON.stringify({ session }),
+      });
+      set((state) => ({
+        tasks: state.tasks.map((t) => (t.id === id ? task : t)),
+        isLoading: false,
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to complete session';
+      set({ error: message, isLoading: false });
+    }
+  },
+
+  uncompleteSession: async (id, date, start) => {
+    set({ isLoading: true, error: null });
+    try {
+      const task = await request<Task>(`/api/tasks/${id}/uncomplete-session`, {
+        method: 'POST',
+        body: JSON.stringify({ date, start }),
+      });
+      set((state) => ({
+        tasks: state.tasks.map((t) => (t.id === id ? task : t)),
+        isLoading: false,
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to undo completed session';
+      set({ error: message, isLoading: false });
+    }
+  },
+
+  resetProgress: async (id) => {
+    set({ isLoading: true, error: null });
+    try {
+      const task = await request<Task>(`/api/tasks/${id}/reset-progress`, { method: 'POST' });
+      set((state) => ({
+        tasks: state.tasks.map((t) => (t.id === id ? task : t)),
+        isLoading: false,
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to reset task progress';
+      set({ error: message, isLoading: false });
+    }
+  },
+
+  loadSeedTasks: async () => {
+    set({ isLoading: true, error: null });
+    try {
+      const tasks = await request<Task[]>('/api/tasks/load-seed', { method: 'POST' });
+      set({ tasks, isLoading: false });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load sample tasks';
+      set({ error: message, isLoading: false });
+    }
+  },
+}));

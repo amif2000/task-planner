@@ -1,13 +1,23 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useTaskStore } from '../../store/useTaskStore';
 import { useDateStore, isToday } from '../../store/useDateStore';
+import { useSettingsStore } from '../../store/useSettingsStore';
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
+function toLocalISODate(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export default function Header() {
   const tasks = useTaskStore((s) => s.tasks);
   const { selectedDate, goToPrev, goToNext, goToToday } = useDateStore();
+  const toggleDayOverride = useSettingsStore((s) => s.toggleDayOverride);
+  const isDayOn = useSettingsStore((s) => s.isDayOn(selectedDate));
 
   const done = tasks.filter((t) => t.status === 'done').length;
   const total = tasks.length;
@@ -43,6 +53,17 @@ export default function Header() {
               Today
             </span>
           )}
+          <button
+            onClick={() => toggleDayOverride(toLocalISODate(selectedDate))}
+            className={`text-xs font-medium border px-2 py-0.5 rounded-md transition-colors ${
+              isDayOn
+                ? 'text-emerald-700 bg-emerald-50 border-emerald-200 hover:border-emerald-400'
+                : 'text-slate-600 bg-slate-100 border-slate-300 hover:border-slate-500'
+            }`}
+            title="Toggle this day ON/OFF for scheduling"
+          >
+            {isDayOn ? 'Day ON' : 'Day OFF'}
+          </button>
         </div>
 
         <button

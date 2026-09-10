@@ -72,10 +72,15 @@ export function buildSchedule(
   meetings: Meeting[],
   settings: Settings,
   date?: Date,
+  now = new Date(),
 ): ScheduledDay {
   const { workStart, workEnd, breakMinutes } = settings;
   const workStartMins = toMinutes(workStart);
   const workEndMins = toMinutes(workEnd);
+  const isToday = date && localISODate(date) === localISODate(now);
+  const currentMinute = now.getHours() * 60 + now.getMinutes()
+    + (now.getSeconds() > 0 || now.getMilliseconds() > 0 ? 1 : 0);
+  const planningStartMins = isToday ? Math.max(workStartMins, currentMinute) : workStartMins;
 
   const normalized = normalizeMeetings(meetings);
 
@@ -110,7 +115,7 @@ export function buildSchedule(
     ...normalized.map((m) => ({ start: toMinutes(m.start), end: toMinutes(m.end) })),
     ...completedSlots.map((s) => ({ start: toMinutes(s.start), end: toMinutes(s.end) })),
   ];
-  const freeIntervals = computeFreeIntervals(busy, workStartMins, workEndMins);
+  const freeIntervals = computeFreeIntervals(busy, planningStartMins, workEndMins);
 
   // Sort tasks: high → medium → low, then by creation date
   const priorityOrder = { high: 0, medium: 1, low: 2 };
@@ -150,10 +155,11 @@ export function buildSchedule(
         if (maxSessionsPerDay !== null && sessionsPlaced >= maxSessionsPerDay) break;
 
         const available = interval.end - interval.start;
-        if (available < minSessionMinutes) break; // interval exhausted — move to next
+        if (available <= 0) break; // interval exhausted — move to next
 
         const sessionSize = Math.min(remaining, maxSessionMinutes, available);
-        if (sessionSize < minSessionMinutes) break;
+        const isFinalRemainder = remaining < minSessionMinutes;
+        if (sessionSize < minSessionMinutes && !isFinalRemainder) break;
 
         // Ensure the session doesn't extend past workEnd
         const sessionEnd = interval.start + sessionSize;
@@ -167,7 +173,7 @@ export function buildSchedule(
           sessionIndex: sessionsPlaced,
         });
 
-        interval.start = sessionEnd + breakMinutes;
+        interval.start = Math.min(sessionEnd + breakMinutes, interval.end);
         remaining -= sessionSize;
       }
     }
@@ -207,12 +213,29 @@ function toMidnight(date: Date): Date {
   return d;
 }
 
+function isWeekend(date: Date): boolean {
+  const day = date.getDay();
+  return day === 5 || day === 6;
+}
+
+function isDayOn(date: Date, settings: Settings): boolean {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  const iso = `${y}-${m}-${d}`;
+  const overrides = settings.dayOverrides ?? {};
+  if (Object.prototype.hasOwnProperty.call(overrides, iso)) {
+    return overrides[iso];
+  }
+  return !isWeekend(date);
+}
+
 /**
  * Return the schedule for a specific date, carrying overflow forward from
  * today so tasks are not duplicated across days.
  *
  * - Past dates  → empty schedule (nothing to plan)
- * - Today       → schedule all active tasks normally
+ * - Today       → schedule active tasks from the current time onward
  * - Future date → simulate each day from today, carry unfinished work forward
  */
 export function getScheduleForDate(
@@ -228,6 +251,10 @@ export function getScheduleForDate(
     return { slots: [], unscheduled: [] };
   }
 
+  if (!isDayOn(target, settings)) {
+    return { slots: [], unscheduled: [] };
+  }
+
   if (target.getTime() === today.getTime()) {
     return buildSchedule(allTasks, getMeetingsFn(targetDate), settings, targetDate);
   }
@@ -237,6 +264,11 @@ export function getScheduleForDate(
 
   const cursor = new Date(today);
   while (toMidnight(cursor) < target) {
+    if (!isDayOn(cursor, settings)) {
+      cursor.setDate(cursor.getDate() + 1);
+      continue;
+    }
+
     const daySchedule = buildSchedule(carryTasks, getMeetingsFn(cursor), settings, cursor);
 
     // Build a set of task IDs that were fully placed (no remaining minutes)

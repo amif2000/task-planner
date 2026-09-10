@@ -40,7 +40,8 @@ You were given a single deployment archive: **`task-planner-deploy.zip`**.
 2. Right-click it → **Extract All…** (or unzip with any tool).
 3. Open the extracted folder — it contains the source, the `companion/` folder,
    `package.json`, the `setup.ps1` / `start.bat` / `start.mjs` scripts, and this
-   document.
+   document. It also contains `backend/server.mjs`, which initializes the MongoDB
+   task and settings collections when the launcher starts.
 
 The archive intentionally **excludes** the generated folders — they are rebuilt
 on the target during setup:
@@ -87,14 +88,15 @@ Double-click **`start.bat`**, or run:
 npm start
 ```
 
-This launches **both** processes in one window:
+This launches all three processes in one window:
 
 - the Outlook companion on `:3001`
+- the task and settings API on `:3002`
 - the built UI on `:4173`
 
 …and opens `http://127.0.0.1:4173` in your default browser.
 
-Press **Ctrl+C** in the console (or close the window) to stop both.
+Press **Ctrl+C** in the console (or close the window) to stop all services.
 
 > First launch tip: Outlook may show a **security prompt** the first time the
 > companion accesses your calendar. Allow access (and optionally tick
@@ -128,22 +130,14 @@ Press **Ctrl+C** in the console (or close the window) to stop both.
 
 ## 6. Configuration
 
-| Setting        | Where                              | Default |
-|----------------|------------------------------------|---------|
-| Companion port | `PORT` env var (read by companion) | `3001`  |
-| UI port        | `UI_PORT` env var (read by launcher) | `4173`  |
-
-> ⚠️ The UI is currently hard-coded to reach the companion at
-> `http://localhost:3001` (see `src/data/meetings.ts` and
-> `src/utils/outlookSync.ts`). If you change the companion `PORT`, update those
-> URLs and re-run `npm run build`. The UI port must stay one the companion's
-> CORS allow-list accepts (`4173` or `5173`).
-
-Example (PowerShell):
+Copy `.env.example` to `.env`, then replace the MongoDB Atlas placeholders:
 
 ```powershell
-$env:UI_PORT = "4173"; node start.mjs
+Copy-Item .env.example .env
 ```
+
+See the variable reference in `README.md`. Keep `.env` private; it is ignored
+by Git and excluded from the deployment archive.
 
 ---
 
@@ -165,6 +159,7 @@ $env:UI_PORT = "4173"; node start.mjs
 | File          | Purpose                                                        |
 |---------------|----------------------------------------------------------------|
 | `setup.ps1`   | One-time install of all dependencies + UI build.               |
-| `start.mjs`   | Launcher that runs the companion **and** the UI together.      |
+| `.env.example` | Safe template documenting runtime configuration.             |
+| `start.mjs`   | Launcher that runs the companion, backend, and UI together.     |
 | `start.bat`   | Double-click wrapper around `start.mjs` (runs setup if needed). |
 | `DEPLOYMENT.md` | This document.                                               |

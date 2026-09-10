@@ -1,9 +1,10 @@
 /**
  * Task Planner — one-shot launcher
  *
- * Starts BOTH processes needed to run the tool:
+ * Starts all processes needed to run the tool:
  *   1. The Outlook Companion API server   (companion/companion.mjs → :3001)
- *   2. The built React UI (static preview) (vite preview           → :4173)
+ *   2. The task and settings API server    (backend/server.mjs     → :3002)
+ *   3. The built React UI (static preview) (vite preview           → :4173)
  *
  * Usage:
  *   node start.mjs            # start both, open the browser
@@ -17,12 +18,16 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const COMPANION_DIR = join(ROOT, 'companion');
 
 const UI_PORT = process.env.UI_PORT || '4173';
 const COMPANION_PORT = process.env.COMPANION_PORT || '3001';
+const API_PORT = process.env.API_PORT || '3002';
 const UI_URL = `http://127.0.0.1:${UI_PORT}`;
 
 const isWindows = process.platform === 'win32';
@@ -106,6 +111,16 @@ async function main() {
     '36',
   );
 
+  log('api', '33', `Starting task planner API on http://localhost:${API_PORT}…`);
+  track(
+    spawn(process.execPath, ['backend/server.mjs'], {
+      cwd: ROOT,
+      env: { ...process.env, API_PORT, CLIENT_ORIGIN: UI_URL },
+    }),
+    'api',
+    '33',
+  );
+
   log('ui', '35', `Serving UI on ${UI_URL}…`);
   track(
     spawn(
@@ -133,7 +148,8 @@ async function main() {
     `\n\x1b[32m▶ Task Planner is running.\x1b[0m` +
     `\n    UI:        ${UI_URL}` +
     `\n    Companion: http://localhost:${COMPANION_PORT}` +
-    `\n    Press Ctrl+C to stop both.\n`,
+    `\n    API:       http://localhost:${API_PORT}` +
+    `\n    Press Ctrl+C to stop all services.\n`,
   );
 }
 

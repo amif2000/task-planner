@@ -79,12 +79,14 @@ export interface Settings {
   workStart: string;
   workEnd: string;
   breakMinutes: number;
+  dayOverrides: Record<string, boolean>;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   workStart: '08:00',
   workEnd: '17:00',
   breakMinutes: 10,
+  dayOverrides: {},
 };
 
 export const TASK_SESSION_DEFAULTS = {
