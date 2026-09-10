@@ -139,6 +139,10 @@ Copy-Item .env.example .env
 See the variable reference in `README.md`. Keep `.env` private; it is ignored
 by Git and excluded from the deployment archive.
 
+If a trusted corporate proxy causes `self-signed certificate in certificate
+chain`, set `MONGODB_TLS_ALLOW_INVALID_CERTIFICATES=true` in `.env`. This
+disables validation for MongoDB only; installing the corporate CA is safer.
+
 ---
 
 ## 7. Troubleshooting

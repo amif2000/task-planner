@@ -65,7 +65,13 @@ export async function refreshMeetings(
 
   if (available) {
     try {
-      const start = new Date(centreDate);
+      // Future schedules cascade unfinished work from today, so their meeting
+      // cache must include today as well as the selected date.
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const selectedDay = new Date(centreDate);
+      selectedDay.setHours(0, 0, 0, 0);
+      const start = new Date(Math.min(today.getTime(), selectedDay.getTime()));
       start.setDate(start.getDate() - 1);
       const end = new Date(centreDate);
       end.setDate(end.getDate() + daysAhead);

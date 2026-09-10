@@ -12,6 +12,7 @@ const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
 const DB_NAME = process.env.MONGODB_DB_NAME || 'task_planner';
 const COLLECTION_NAME = process.env.MONGODB_COLLECTION_NAME || 'tasks';
 const SETTINGS_COLLECTION_NAME = process.env.MONGODB_SETTINGS_COLLECTION_NAME || 'settings';
+const ALLOW_INVALID_CERTIFICATES = process.env.MONGODB_TLS_ALLOW_INVALID_CERTIFICATES === 'true';
 const TASKS_LOCAL_STORAGE_KEY = 'task-planner-tasks';
 
 const STATUS_CYCLE = {
@@ -61,7 +62,12 @@ function normalizeTask(task, now = new Date().toISOString()) {
   };
 }
 
-const client = new MongoClient(buildMongoUri());
+if (ALLOW_INVALID_CERTIFICATES) {
+  console.warn('WARNING: MongoDB TLS certificate validation is disabled.');
+}
+const client = new MongoClient(buildMongoUri(), {
+  tlsAllowInvalidCertificates: ALLOW_INVALID_CERTIFICATES,
+});
 await client.connect();
 const db = client.db(DB_NAME);
 const collection = db.collection(COLLECTION_NAME);

@@ -31,11 +31,20 @@ variables without containing real credentials:
 | `MONGODB_DB_NAME` | Database name | `task_planner` |
 | `MONGODB_COLLECTION_NAME` | Task collection | `tasks` |
 | `MONGODB_SETTINGS_COLLECTION_NAME` | Settings collection | `settings` |
+| `MONGODB_TLS_ALLOW_INVALID_CERTIFICATES` | Disable certificate validation only for MongoDB; use solely behind a trusted certificate-intercepting proxy | `false` |
 | `API_PORT` | Backend API port | `3002` |
 | `CLIENT_ORIGIN` | Browser origin allowed by API CORS during development | `http://localhost:5173` |
 | `VITE_API_BASE_URL` | Backend URL embedded into the frontend | `http://localhost:3002` |
 | `UI_PORT` | Production preview UI port | `4173` |
 | `COMPANION_PORT` | Outlook companion port | `3001` |
+
+If Atlas fails with `self-signed certificate in certificate chain`, prefer
+installing your organization's CA certificate. As a temporary workaround, add
+this to `.env` and restart the app:
+
+```env
+MONGODB_TLS_ALLOW_INVALID_CERTIFICATES=true
+```
 
 ## Scripts
 - `npm run dev` - runs frontend + backend together
